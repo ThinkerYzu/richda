@@ -46,6 +46,10 @@ class CFACtx_X86_RSP(object):
             elif i.mnemonic == 'sub' and i.op_str.startswith('rsp, 0x'):
                 self.rsp_shift += int(i.op_str[5:], 16)
                 break
+            elif i.mnemonic.startswith('j') or \
+                 (i.mnemonic in ('ret', 'leave')):
+                # A call frame should be ready before any branch
+                break
             pass
         pass
     pass
