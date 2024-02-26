@@ -55,6 +55,8 @@ def find_function(elffile, func_name):
             for symbol in section.iter_symbols():
                 if symbol['st_info']['type'] != 'STT_FUNC':
                     continue
+                if symbol['st_shndx'] == 0:
+                    continue
                 if symbol.name != func_name:
                     continue
                 return symbol
