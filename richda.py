@@ -4,6 +4,51 @@ from elftools.dwarf.descriptions import describe_reg_name
 import capstone
 import sys
 
+class CFACtx_X86_RSP(object):
+    def __init__(self):
+        self.rsp_shift = 8
+        pass
+
+    def translate_cfa_relative(self, offset):
+        return 'rsp + 0x%x' % (offset + self.rsp_shift)
+
+    def translate_exprloc(self, func_die, expr):
+        if not expr:
+            return None
+        deref = False
+        if len(expr) == 2 and expr[1].op_name == 'DW_OP_deref':
+            expr.pop()
+            deref = True
+            pass
+        if len(expr) == 1:
+            op = expr[0]
+            result = None
+            if op.op_name.startswith('DW_OP_reg'):
+                regno = int(op.op_name.strip('DW_OP_reg'))
+                result = describe_reg_name(regno, 'x64')
+            elif op.op_name == 'DW_OP_addr':
+                result = '0x%x' %(op.args[0])
+            elif op.op_name == 'DW_OP_fbreg':
+                result = self.translate_cfa_relative(op.args[0])
+                pass
+            if deref and result:
+                return '[%s]' %(result)
+            return result
+
+        return None
+
+    def parse_code(self, code, start_addr):
+        md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+        for i in md.disasm(code, start_addr):
+            if i.mnemonic == 'push' and i.op_str.startswith('r'):
+                self.rsp_shift += 8
+            elif i.mnemonic == 'sub' and i.op_str.startswith('rsp, 0x'):
+                self.rsp_shift += int(i.op_str[5:], 16)
+                break
+            pass
+        pass
+    pass
+
 def find_function(elffile, func_name):
     for section in elffile.iter_sections():
         if section.name == '.symtab':
@@ -42,7 +87,7 @@ def prepare_var_patterns(func_die, addr, vars, cfa_ctx):
         dwarfinfo = var.dwarfinfo
         expr = compute_location(dwarfinfo, loc_attr, addr, base_addr)
         if expr:
-            expr = translate_exprloc(func_die, expr, cfa_ctx)
+            expr = cfa_ctx.translate_exprloc(func_die, expr)
             if expr:
                 patterns.append((var.attributes['DW_AT_name'].value.decode('utf-8'), expr))
                 pass
@@ -51,11 +96,11 @@ def prepare_var_patterns(func_die, addr, vars, cfa_ctx):
     return patterns
 
 def disassemble(func_die, start_addr, code, vars):
-    cfa_ctx = ['rsp', 8]        # CFA is rsp+8 at the entry. The 8 is
-                                # for return address.
+    cfa_ctx = CFACtx_X86_RSP()
+    cfa_ctx.parse_code(code, start_addr)
+
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     symcache = {}
-    rsp_adj = False
     for i in md.disasm(code, start_addr):
         comment = ''
         if i.mnemonic == 'call':
@@ -74,13 +119,7 @@ def disassemble(func_die, start_addr, code, vars):
                     pass
                 pass
             pass
-        elif i.mnemonic == 'push' and i.op_str.startswith('r') and not rsp_adj:
-            cfa_ctx[1] = cfa_ctx[1] + 8
-            pass
-        elif i.mnemonic == 'sub' and i.op_str.startswith('rsp, 0x') and not rsp_adj:
-            cfa_ctx[1] += int(i.op_str[4:], 16)
-            rsp_adj = True
-            pass
+
         var_patterns = prepare_var_patterns(func_die, i.address, vars, cfa_ctx)
         for var, expr in var_patterns:
             if i.op_str.find(expr) >= 0:
@@ -169,30 +208,6 @@ def dump_loclist(dwarfinfo, var_die):
         print(parser.parse_expr(entry.loc_expr))
         pass
     pass
-
-def translate_exprloc(func_die, expr, cfa_ctx=None):
-    if not expr:
-        return None
-    deref = False
-    if len(expr) == 2 and expr[1].op_name == 'DW_OP_deref':
-        expr.pop()
-        deref = True
-        pass
-    if len(expr) == 1:
-        op = expr[0]
-        result = None
-        if op.op_name.startswith('DW_OP_reg'):
-            regno = int(op.op_name.strip('DW_OP_reg'))
-            result = describe_reg_name(regno, 'x64')
-        elif op.op_name == 'DW_OP_addr':
-            result = '0x%x' %(op.args[0])
-        elif op.op_name == 'DW_OP_fbreg' and cfa_ctx:
-            result = '%s + 0x%x' % (cfa_ctx[0], cfa_ctx[1] + op.args[0])
-        if deref and result:
-            return '[%s]' %(result)
-        return result
-        
-    return None
 
 def parse_frame_base(func_die):
     if 'DW_AT_frame_base' not in func_die.attributes:
