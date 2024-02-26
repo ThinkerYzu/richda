@@ -2,6 +2,7 @@ from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from elftools.dwarf.descriptions import describe_reg_name
 import capstone
+import argparse
 import sys
 
 class CFACtx_X86_RSP(object):
@@ -221,36 +222,45 @@ def parse_frame_base(func_die):
         return expr
     return None
 
-fname = sys.argv[1]
-func_name = sys.argv[2]
-with open(fname, 'rb') as f:
-    elffile = ELFFile(f)
-    symbol = find_function(elffile, func_name)
-    if symbol:
-        print('%s @ 0x%x (size: %d)' % (func_name,
-                                        symbol['st_value'],
-                                        symbol['st_size']))
-        section = elffile.get_section(symbol['st_shndx'])
-        print('Section: %s (off: 0x%x, virt: 0x%x)' % (section.name, section['sh_offset'], section['sh_addr']))
-        print('Section offset: 0x%x' % get_sec_offset(elffile, symbol))
-        soff = get_sec_offset(elffile, symbol)
-        DIE = get_func_DIE(elffile, symbol)
-        print('Frame base: %s' % parse_frame_base(DIE))
-        vars = []
-        for param in iter_func_params(DIE):
-            if 'DW_AT_location' in param.attributes:
-                vars.append(param)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Disassemble a function')
+    parser.add_argument('elffile', type=str, help='ELF file')
+    parser.add_argument('func', type=str, help='Function name')
+    args = parser.parse_args()
+
+    fname = args.elffile
+    func_name = args.func
+
+    with open(fname, 'rb') as f:
+        elffile = ELFFile(f)
+        symbol = find_function(elffile, func_name)
+        if symbol:
+            print('%s @ 0x%x (size: %d)' % (func_name,
+                                            symbol['st_value'],
+                                            symbol['st_size']))
+            section = elffile.get_section(symbol['st_shndx'])
+            print('Section: %s (off: 0x%x, virt: 0x%x)' % (section.name, section['sh_offset'], section['sh_addr']))
+            print('Section offset: 0x%x' % get_sec_offset(elffile, symbol))
+            soff = get_sec_offset(elffile, symbol)
+            DIE = get_func_DIE(elffile, symbol)
+            print('Frame base: %s' % parse_frame_base(DIE))
+            vars = []
+            for param in iter_func_params(DIE):
+                if 'DW_AT_location' in param.attributes:
+                    vars.append(param)
+                    pass
+                print('  parameter: %s' % (param.attributes['DW_AT_name'].value.decode('utf-8')))
                 pass
-            print('  parameter: %s' % (param.attributes['DW_AT_name'].value.decode('utf-8')))
-            pass
-        for var in iter_func_vars(DIE):
-            if 'DW_AT_location' in var.attributes:
-                vars.append(var)
+            for var in iter_func_vars(DIE):
+                if 'DW_AT_location' in var.attributes:
+                    vars.append(var)
+                    pass
+                print('  variable: %s' % (var.attributes['DW_AT_name'].value.decode('utf-8')))
                 pass
-            print('  variable: %s' % (var.attributes['DW_AT_name'].value.decode('utf-8')))
+            code = section.data()[soff:soff+symbol['st_size']]
+            disassemble(DIE, symbol['st_value'], code, vars)
             pass
-        code = section.data()[soff:soff+symbol['st_size']]
-        disassemble(DIE, symbol['st_value'], code, vars)
         pass
     pass
+
 
