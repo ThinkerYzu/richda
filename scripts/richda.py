@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from elftools.dwarf.descriptions import describe_reg_name
