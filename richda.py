@@ -269,6 +269,10 @@ if __name__ == '__main__':
             print('Section offset: 0x%x' % get_sec_offset(elffile, symbol))
             soff = get_sec_offset(elffile, symbol)
             DIE = get_func_DIE(elffile, symbol)
+            if not DIE:
+                print('No DIE (DWARF) found for %s' % func_name)
+                sys.exit(1)
+                pass
             print('Frame base: %s' % parse_frame_base(DIE))
             vars = []
             for param in iter_func_params(DIE):
