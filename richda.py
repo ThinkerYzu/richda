@@ -5,13 +5,23 @@ import capstone
 import argparse
 import sys
 
-class CFACtx_X86_RSP(object):
+class CFACtx_X86_RSP_RBP(object):
     def __init__(self):
-        self.rsp_shift = 8
+        self.rsp_rbp_shift = 8
+        self.reg = 'rsp'
         pass
 
     def translate_cfa_relative(self, offset):
-        return 'rsp + 0x%x' % (offset + self.rsp_shift)
+        off = offset + self.rsp_rbp_shift
+        if off == 0:
+            return self.reg
+        if off > 0:
+            if off < 10:
+                return '%s + %d' %(self.reg, off)
+            return '%s + 0x%x' % (self.reg, off)
+        if off > -10:
+            return '%s - %d' %(self.reg, -off)
+        return '%s - 0x%x' % (self.reg, -off)
 
     def translate_exprloc(self, func_die, expr):
         if not expr:
@@ -31,6 +41,7 @@ class CFACtx_X86_RSP(object):
                 result = '0x%x' %(op.args[0])
             elif op.op_name == 'DW_OP_fbreg':
                 result = self.translate_cfa_relative(op.args[0])
+                result = '[%s]' % result
                 pass
             if deref and result:
                 return '[%s]' %(result)
@@ -42,9 +53,14 @@ class CFACtx_X86_RSP(object):
         md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
         for i in md.disasm(code, start_addr):
             if i.mnemonic == 'push' and i.op_str.startswith('r'):
-                self.rsp_shift += 8
+                self.rsp_rbp_shift += 8
+            elif i.mnemonic == 'mov' and i.op_str == 'rbp, rsp':
+                # Use rbp as the base register
+                self.reg = 'rbp'
+                break
             elif i.mnemonic == 'sub' and i.op_str.startswith('rsp, 0x'):
-                self.rsp_shift += int(i.op_str[5:], 16)
+                # Use rsp as the base register
+                self.rsp_rbp_shift += int(i.op_str[5:], 16)
                 break
             elif i.mnemonic.startswith('j') or \
                  (i.mnemonic in ('ret', 'leave')):
@@ -107,7 +123,7 @@ def prepare_var_patterns(func_die, addr, vars, cfa_ctx):
     return patterns
 
 def disassemble(func_die, start_addr, code, vars):
-    cfa_ctx = CFACtx_X86_RSP()
+    cfa_ctx = CFACtx_X86_RSP_RBP()
     cfa_ctx.parse_code(code, start_addr)
 
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
