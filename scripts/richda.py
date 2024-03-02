@@ -90,6 +90,11 @@ class CFACtx_X86_RSP_RBP(object):
         return None
 
     def prepare_var_patterns(self, func_die, addr):
+        '''
+        Prepare the patterns for the variables in the function.
+
+        The patterns are addresses related to the RSP or RBP.
+        '''
         patterns = []
         base_addr = func_die.cu.get_top_DIE().attributes['DW_AT_low_pc'].value
         for var in self.vars:
@@ -132,6 +137,9 @@ class CFACtx_X86_RSP_RBP(object):
     pass
 
 def find_function(elffile, func_name):
+    '''
+    Find the ELF symbol of a function by name.
+    '''
     for section in elffile.iter_sections():
         if section.name == '.symtab':
             for symbol in section.iter_symbols():
@@ -147,6 +155,9 @@ def find_function(elffile, func_name):
     return None
 
 def get_sec_offset(elffile, symbol):
+    '''
+    Get the offset of a symbol in its section.
+    '''
     section = elffile.get_section(symbol['st_shndx'])
     return symbol['st_value'] - section['sh_addr']
 
@@ -209,6 +220,9 @@ def disassemble(func_die, start_addr, code, cfa_ctx):
     pass
 
 def get_func_DIE(elffile, symbol):
+    '''
+    Get the DIE of the function from DWARF.
+    '''
     dwarfinfo = elffile.get_dwarf_info()
     for CU in dwarfinfo.iter_CUs():
         # Over all direct children of the top DIE of the CU
@@ -247,6 +261,11 @@ def iter_func_params(DIE):
     pass
 
 def dump_loclist(dwarfinfo, var_die):
+    '''
+    Dump the location list of a variable.
+
+    A helper function for debugging.
+    '''
     if 'DW_AT_location' not in var_die.attributes:
         return
     loc_attr = var_die.attributes['DW_AT_location']
