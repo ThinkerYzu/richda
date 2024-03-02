@@ -7,6 +7,21 @@ import argparse
 import sys
 
 class CFACtx_X86_RSP_RBP(object):
+    '''
+    Context for CFA (Canonical Frame Address) computation.
+
+    The CFA is the value of the stack pointer at the call site of the
+    function. It is used to compute the location of variables in the
+    stack frame.
+
+    For x86_64, the CFA is usually the value of the stack pointer (RSP)
+    at the call site. However, the CFA can be relative to the base
+    pointer (RBP) if the function uses RBP as the base register.
+
+    This class will parse the code to find out if the CFA is relative to
+    RSP or RBP. It will also prepare the patterns for the variables in
+    the function.
+    '''
     def __init__(self, vars):
         self.rsp_rbp_shift = 8
         self.reg = 'rsp'
