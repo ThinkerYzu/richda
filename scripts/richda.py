@@ -7,12 +7,13 @@ import argparse
 import sys
 
 class CFACtx_X86_RSP_RBP(object):
-    def __init__(self):
+    def __init__(self, vars):
         self.rsp_rbp_shift = 8
         self.reg = 'rsp'
+        self.vars = vars
         pass
 
-    def translate_cfa_relative(self, offset):
+    def _translate_cfa_relative(self, offset):
         off = offset + self.rsp_rbp_shift
         if off == 0:
             return self.reg
@@ -24,7 +25,7 @@ class CFACtx_X86_RSP_RBP(object):
             return '%s - %d' %(self.reg, -off)
         return '%s - 0x%x' % (self.reg, -off)
 
-    def translate_exprloc(self, func_die, expr):
+    def _translate_exprloc(self, func_die, expr):
         if not expr:
             return None
         deref = False
@@ -41,7 +42,7 @@ class CFACtx_X86_RSP_RBP(object):
             elif op.op_name == 'DW_OP_addr':
                 result = '0x%x' %(op.args[0])
             elif op.op_name == 'DW_OP_fbreg':
-                result = self.translate_cfa_relative(op.args[0])
+                result = self._translate_cfa_relative(op.args[0])
                 result = '[%s]' % result
                 pass
             if deref and result:
@@ -49,6 +50,24 @@ class CFACtx_X86_RSP_RBP(object):
             return result
 
         return None
+
+    def prepare_var_patterns(self, func_die, addr):
+        patterns = []
+        base_addr = func_die.cu.get_top_DIE().attributes['DW_AT_low_pc'].value
+        for var in self.vars:
+            if 'DW_AT_location' not in var.attributes:
+                continue
+            loc_attr = var.attributes['DW_AT_location']
+            dwarfinfo = var.dwarfinfo
+            expr = compute_location(dwarfinfo, loc_attr, addr, base_addr)
+            if expr:
+                expr = cfa_ctx._translate_exprloc(func_die, expr)
+                if expr:
+                    patterns.append((var.attributes['DW_AT_name'].value.decode('utf-8'), expr))
+                    pass
+                pass
+            pass
+        return patterns
 
     def parse_code(self, code, start_addr):
         md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
@@ -105,26 +124,7 @@ def create_addr2symbol_cache(elffile, addrs):
         pass
     return symcache
 
-def prepare_var_patterns(func_die, addr, vars, cfa_ctx):
-    patterns = []
-    base_addr = func_die.cu.get_top_DIE().attributes['DW_AT_low_pc'].value
-    for var in vars:
-        if 'DW_AT_location' not in var.attributes:
-            continue
-        loc_attr = var.attributes['DW_AT_location']
-        dwarfinfo = var.dwarfinfo
-        expr = compute_location(dwarfinfo, loc_attr, addr, base_addr)
-        if expr:
-            expr = cfa_ctx.translate_exprloc(func_die, expr)
-            if expr:
-                patterns.append((var.attributes['DW_AT_name'].value.decode('utf-8'), expr))
-                pass
-            pass
-        pass
-    return patterns
-
-def disassemble(func_die, start_addr, code, vars):
-    cfa_ctx = CFACtx_X86_RSP_RBP()
+def disassemble(func_die, start_addr, code, cfa_ctx):
     cfa_ctx.parse_code(code, start_addr)
 
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
@@ -150,7 +150,7 @@ def disassemble(func_die, start_addr, code, vars):
                 pass
             pass
 
-        var_patterns = prepare_var_patterns(func_die, i.address, vars, cfa_ctx)
+        var_patterns = cfa_ctx.prepare_var_patterns(func_die, i.address)
         for var, expr in var_patterns:
             if i.op_str.find(expr) >= 0:
                 if not comment:
@@ -289,7 +289,10 @@ if __name__ == '__main__':
                 print('  variable: %s' % (var.attributes['DW_AT_name'].value.decode('utf-8')))
                 pass
             code = section.data()[soff:soff+symbol['st_size']]
-            disassemble(DIE, symbol['st_value'], code, vars)
+            cfa_ctx = CFACtx_X86_RSP_RBP(vars)
+            disassemble(DIE, symbol['st_value'], code, cfa_ctx)
+        else:
+            print('Function %s not found' % func_name)
             pass
         pass
     pass
