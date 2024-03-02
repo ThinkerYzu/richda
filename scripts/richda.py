@@ -187,7 +187,7 @@ def create_addr2symbol_cache(elffile, code, start_addr):
         pass
     return symcache
 
-def disassemble(func_die, start_addr, code, cfa_ctx):
+def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
     cfa_ctx.parse_code(code, start_addr)
 
     symcache = create_addr2symbol_cache(elffile, code, start_addr)
@@ -289,6 +289,44 @@ def parse_frame_base(func_die):
         return expr
     return None
 
+def create_disassemble_report(f, func_name):
+    elffile = ELFFile(f)
+    symbol = find_function(elffile, func_name)
+    if symbol:
+        print('%s @ 0x%x (size: %d)' % (func_name,
+                                        symbol['st_value'],
+                                        symbol['st_size']))
+        section = elffile.get_section(symbol['st_shndx'])
+        print('Section: %s (off: 0x%x, virt: 0x%x)' % (section.name, section['sh_offset'], section['sh_addr']))
+        print('Section offset: 0x%x' % get_sec_offset(elffile, symbol))
+        soff = get_sec_offset(elffile, symbol)
+        DIE = get_func_DIE(elffile, symbol)
+        if not DIE:
+            print('No DIE (DWARF) found for %s' % func_name)
+            sys.exit(1)
+            pass
+        print('Frame base: %s' % parse_frame_base(DIE))
+        vars = []
+        for param in iter_func_params(DIE):
+            if 'DW_AT_location' in param.attributes:
+                vars.append(param)
+                pass
+            print('  parameter: %s' % (param.attributes['DW_AT_name'].value.decode('utf-8')))
+            pass
+        for var in iter_func_vars(DIE):
+            if 'DW_AT_location' in var.attributes:
+                vars.append(var)
+                pass
+            print('  variable: %s' % (var.attributes['DW_AT_name'].value.decode('utf-8')))
+            pass
+        code = section.data()[soff:soff+symbol['st_size']]
+        cfa_ctx = CFACtx_X86_RSP_RBP(vars)
+        disassemble(elffile, DIE, symbol['st_value'], code, cfa_ctx)
+    else:
+        print('Function %s not found' % func_name)
+        pass
+    pass
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Disassemble a function')
     parser.add_argument('elffile', type=str, help='ELF file')
@@ -299,41 +337,7 @@ if __name__ == '__main__':
     func_name = args.func
 
     with open(fname, 'rb') as f:
-        elffile = ELFFile(f)
-        symbol = find_function(elffile, func_name)
-        if symbol:
-            print('%s @ 0x%x (size: %d)' % (func_name,
-                                            symbol['st_value'],
-                                            symbol['st_size']))
-            section = elffile.get_section(symbol['st_shndx'])
-            print('Section: %s (off: 0x%x, virt: 0x%x)' % (section.name, section['sh_offset'], section['sh_addr']))
-            print('Section offset: 0x%x' % get_sec_offset(elffile, symbol))
-            soff = get_sec_offset(elffile, symbol)
-            DIE = get_func_DIE(elffile, symbol)
-            if not DIE:
-                print('No DIE (DWARF) found for %s' % func_name)
-                sys.exit(1)
-                pass
-            print('Frame base: %s' % parse_frame_base(DIE))
-            vars = []
-            for param in iter_func_params(DIE):
-                if 'DW_AT_location' in param.attributes:
-                    vars.append(param)
-                    pass
-                print('  parameter: %s' % (param.attributes['DW_AT_name'].value.decode('utf-8')))
-                pass
-            for var in iter_func_vars(DIE):
-                if 'DW_AT_location' in var.attributes:
-                    vars.append(var)
-                    pass
-                print('  variable: %s' % (var.attributes['DW_AT_name'].value.decode('utf-8')))
-                pass
-            code = section.data()[soff:soff+symbol['st_size']]
-            cfa_ctx = CFACtx_X86_RSP_RBP(vars)
-            disassemble(DIE, symbol['st_value'], code, cfa_ctx)
-        else:
-            print('Function %s not found' % func_name)
-            pass
+        create_disassemble_report(f, func_name)
         pass
     pass
 
