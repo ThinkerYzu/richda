@@ -109,13 +109,24 @@ def get_sec_offset(elffile, symbol):
     section = elffile.get_section(symbol['st_shndx'])
     return symbol['st_value'] - section['sh_addr']
 
-def create_addr2symbol_cache(elffile, addrs):
+def create_addr2symbol_cache(elffile, code, start_addr):
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    tosymcache = set()
+    for i in md.disasm(code, start_addr):
+        if i.mnemonic == 'call':
+            if i.op_str.startswith('0x'):
+                addr = int(i.op_str[2:], 16)
+                tosymcache.add(addr)
+                pass
+            pass
+        pass
+
     symcache = {}
     symtab = elffile.get_section_by_name('.symtab')
     for symbol in symtab.iter_symbols():
         if symbol['st_info']['type'] != 'STT_FUNC':
             continue
-        for addr in addrs:
+        for addr in tosymcache:
             if symbol['st_value'] <= addr and \
                addr < symbol['st_value'] + symbol['st_size']:
                 symcache[addr] = symbol
@@ -127,18 +138,9 @@ def create_addr2symbol_cache(elffile, addrs):
 def disassemble(func_die, start_addr, code, cfa_ctx):
     cfa_ctx.parse_code(code, start_addr)
 
-    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
-    tosymcache = set()
-    for i in md.disasm(code, start_addr):
-        if i.mnemonic == 'call':
-            if i.op_str.startswith('0x'):
-                addr = int(i.op_str[2:], 16)
-                tosymcache.add(addr)
-                pass
-            pass
-        pass
-    symcache = create_addr2symbol_cache(elffile, tosymcache)
+    symcache = create_addr2symbol_cache(elffile, code, start_addr)
 
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     for i in md.disasm(code, start_addr):
         comment = ''
         if i.mnemonic == 'call':
