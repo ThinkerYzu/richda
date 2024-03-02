@@ -66,6 +66,29 @@ class CFACtx_X86_RSP_RBP(object):
 
         return None
 
+    @staticmethod
+    def _compute_location(dwarfinfo, loc_attr, addr, base_addr=0):
+        if loc_attr.form == 'DW_FORM_sec_offset':
+            off = loc_attr.value
+            loclists = dwarfinfo.location_lists()
+            loclist = loclists.get_location_list_at_offset(off)
+            addr_r = addr - base_addr
+            result = None
+            for entry in loclist:
+                if entry.__class__.__name__ == 'BaseAddressEntry':
+                    base_addr = entry.base_address
+                    addr_r = addr - base_addr
+                    continue
+                if addr_r < entry.begin_offset or addr_r >= entry.end_offset:
+                    continue
+                parser = DWARFExprParser(dwarfinfo.structs)
+                return parser.parse_expr(entry.loc_expr)
+            pass
+        elif loc_attr.form == 'DW_FORM_exprloc':
+            parser = DWARFExprParser(dwarfinfo.structs)
+            return parser.parse_expr(loc_attr.value)
+        return None
+
     def prepare_var_patterns(self, func_die, addr):
         patterns = []
         base_addr = func_die.cu.get_top_DIE().attributes['DW_AT_low_pc'].value
@@ -74,9 +97,9 @@ class CFACtx_X86_RSP_RBP(object):
                 continue
             loc_attr = var.attributes['DW_AT_location']
             dwarfinfo = var.dwarfinfo
-            expr = compute_location(dwarfinfo, loc_attr, addr, base_addr)
+            expr = self._compute_location(dwarfinfo, loc_attr, addr, base_addr)
             if expr:
-                expr = cfa_ctx._translate_exprloc(func_die, expr)
+                expr = self._translate_exprloc(func_die, expr)
                 if expr:
                     patterns.append((var.attributes['DW_AT_name'].value.decode('utf-8'), expr))
                     pass
@@ -222,28 +245,6 @@ def iter_func_params(DIE):
             pass
         pass
     pass
-
-def compute_location(dwarfinfo, loc_attr, addr, base_addr=0):
-    if loc_attr.form == 'DW_FORM_sec_offset':
-        off = loc_attr.value
-        loclists = dwarfinfo.location_lists()
-        loclist = loclists.get_location_list_at_offset(off)
-        addr_r = addr - base_addr
-        result = None
-        for entry in loclist:
-            if entry.__class__.__name__ == 'BaseAddressEntry':
-                base_addr = entry.base_address
-                addr_r = addr - base_addr
-                continue
-            if addr_r < entry.begin_offset or addr_r >= entry.end_offset:
-                continue
-            parser = DWARFExprParser(dwarfinfo.structs)
-            return parser.parse_expr(entry.loc_expr)
-            pass
-    elif loc_attr.form == 'DW_FORM_exprloc':
-        parser = DWARFExprParser(dwarfinfo.structs)
-        return parser.parse_expr(loc_attr.value)
-    return None
 
 def dump_loclist(dwarfinfo, var_die):
     if 'DW_AT_location' not in var_die.attributes:
