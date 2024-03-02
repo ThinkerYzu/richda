@@ -70,6 +70,9 @@ class CFACtx_X86_RSP_RBP(object):
         return patterns
 
     def parse_code(self, code, start_addr):
+        '''
+        Parse the code to find out if the CFA is relative to RSP or RBP.
+        '''
         md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
         for i in md.disasm(code, start_addr):
             if i.mnemonic == 'push' and i.op_str.startswith('r'):
