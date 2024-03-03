@@ -373,9 +373,14 @@ def create_disassemble_report(f, func_name):
         DIE = get_func_DIE(elffile, symbol)
         if not DIE:
             print('No DIE (DWARF) found for %s' % func_name)
-            sys.exit(1)
-            pass
+            return
+
+        frame_base = parse_frame_base(DIE)
+        if (not frame_base) or (len(frame_base) != 1) or frame_base[0].op_name != 'DW_OP_call_frame_cfa':
+            print('Unable to handle frame base %s' % frame_base)
+            return
         print('Frame base: %s' % parse_frame_base(DIE))
+
         vars = []
         for param in iter_func_params(DIE):
             if 'DW_AT_location' in param.attributes:
