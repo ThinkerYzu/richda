@@ -2,9 +2,79 @@
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from elftools.dwarf.descriptions import describe_reg_name
+from dataclasses import dataclass
 import capstone
 import argparse
 import sys
+
+@dataclass(eq=True, frozen=True)
+class VarLoc(object):
+    '''
+    Describe the location of a variable.
+    '''
+    base_reg: str = ''
+    index_reg: str = ''
+    offset: int = 0
+    is_deref: bool = False
+
+    def match_partial(self, other):
+        '''Match the partial location.
+
+        It match other location exactly if is_deref is True.  It match
+        other location if the base_reg is the same as base_reg or
+        index_reg of the other location and is_deref is False.
+        '''
+        if not other:
+            return False
+        if self == other:
+            return True
+        if self.is_deref:
+            return False
+        if self.base_reg:
+            return self.base_reg == other.base_reg or \
+                self.base_reg == other.index_reg
+        return False
+
+    @staticmethod
+    def from_operand(insn, op):
+        '''Create VarLoc from an operand of an instruction.'''
+        if op.type == capstone.x86.X86_OP_MEM:
+            if op.mem.base:
+                base_name = insn.reg_name(op.mem.base)
+            else:
+                base_name = ''
+                pass
+            if op.mem.index:
+                index_name = insn.reg_name(op.mem.index)
+            else:
+                index_name = ''
+                pass
+            return VarLoc(base_reg=base_name, index_reg=index_name,
+                          offset=op.mem.disp, is_deref=True)
+        if op.type == capstone.x86.X86_OP_REG:
+            return VarLoc(base_reg=insn.reg_name(op.reg))
+        return None
+
+    def __str__(self):
+        if self.is_deref:
+            r = self.base_reg
+            if self.index_reg:
+                r += ' + ' + self.index_reg
+                pass
+            if self.offset:
+                if self.offset >= 10:
+                    r += ' + 0x%x' % self.offset
+                elif self.offset >= 0:
+                    r += ' + %d' % self.offset
+                elif self.offset > -10:
+                    r += ' - %d' % -self.offset
+                else:
+                    r += ' - 0x%x' % -self.offset
+                    pass
+                pass
+            return '[%s]' % r
+        return self.base_reg
+    pass
 
 class CFACtx_X86_RSP_RBP(object):
     '''
@@ -28,19 +98,8 @@ class CFACtx_X86_RSP_RBP(object):
         self.vars = vars
         pass
 
-    def _translate_cfa_relative(self, offset):
-        off = offset + self.rsp_rbp_shift
-        if off == 0:
-            return self.reg
-        if off > 0:
-            if off < 10:
-                return '%s + %d' %(self.reg, off)
-            return '%s + 0x%x' % (self.reg, off)
-        if off > -10:
-            return '%s - %d' %(self.reg, -off)
-        return '%s - 0x%x' % (self.reg, -off)
-
     def _translate_exprloc(self, func_die, expr):
+        '''Translate the DWARF expression to VarLoc.'''
         if not expr:
             return None
         deref = False
@@ -51,17 +110,18 @@ class CFACtx_X86_RSP_RBP(object):
         if len(expr) == 1:
             op = expr[0]
             result = None
-            if op.op_name.startswith('DW_OP_reg'):
+            if op.op_name.startswith('DW_OP_reg'):                
                 regno = int(op.op_name.strip('DW_OP_reg'))
-                result = describe_reg_name(regno, 'x64')
+                reg_name = base_reg=describe_reg_name(regno, 'x64')
+                result = VarLoc(base_reg=reg_name, is_deref=deref)
             elif op.op_name == 'DW_OP_addr':
-                result = '0x%x' %(op.args[0])
+                result = VarLoc(offset=op.args[0], is_deref=deref)
             elif op.op_name == 'DW_OP_fbreg':
-                result = self._translate_cfa_relative(op.args[0])
-                result = '[%s]' % result
+                # Always dereference the frame base register
+                result = VarLoc(base_reg=self.reg,
+                                offset=op.args[0] + self.rsp_rbp_shift,
+                                is_deref=True)
                 pass
-            if deref and result:
-                return '[%s]' %(result)
             return result
 
         return None
@@ -216,6 +276,7 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
     derived_patterns = {}
 
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
     for i in md.disasm(code, start_addr):
         comment = ''
         if i.mnemonic == 'call':
@@ -231,23 +292,28 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
             derived_patterns.clear()
             pass
 
-        try:
-            op_left, op_right = i.op_str.split(', ')
-        except ValueError:
-            op_left = i.op_str
-            op_right = ''
-            pass
-
         var_patterns = [(var, expr, False)
                         for var, expr in cfa_ctx.prepare_var_patterns(func_die, i.address)]
         var_patterns.extend([(var, expr, True)
                              for expr, var in derived_patterns.items()])
         for var, expr, derived in var_patterns:
-            if op_left in derived_patterns:
-                del derived_patterns[op_left]
+            if len(i.operands):
+                left_loc = VarLoc.from_operand(i, i.operands[0])
+            else:
+                left_loc = None
                 pass
-            if i.op_str.find(expr) >= 0:
-                if '[' not in expr and op_left.find(expr) >= 0:
+            if len(i.operands) == 2:
+                right_loc = VarLoc.from_operand(i, i.operands[1])
+            else:
+                right_loc = None
+                pass
+
+            if left_loc in derived_patterns:
+                del derived_patterns[left_loc]
+                pass
+
+            if expr.match_partial(left_loc) or expr.match_partial(right_loc):
+                if (not expr.is_deref) and expr.match_partial(left_loc):
                     # Pure registers at left size. Its value is being
                     # replaced. We don't need to annotate it.
                     continue
@@ -263,26 +329,26 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
                     comment += ' (D)'
                     pass
 
-                if i.mnemonic == 'mov' and op_right.find(expr) >= 0 and \
-                   (('[' not in op_right) or ('[' in expr)):
+                if i.mnemonic == 'mov' and right_loc and right_loc == expr:
                     # The expression matches the right operand fully.
                     # If the expression is only a part of the right
                     # operand, we don't need to add the left operand to
                     # the derived patterns.
-                    if '[' not in op_left:
+                    if left_loc and not left_loc.is_deref:
                         # Add to the derived patterns if the left size
                         # operand is a register, not a memory.
-                        derived_patterns[op_left] = var
+                        derived_patterns[left_loc] = var
                         pass
                     pass
                 break
             pass
 
-        if i.mnemonic == 'call' and 'rax' in derived_patterns:
+        rax_loc = VarLoc(base_reg='rax')
+        if i.mnemonic == 'call' and rax_loc in derived_patterns:
             # rax is used to store the return value of a function
             # call. Its value is being replaced. Remove it from the
             # derived patterns.
-            del derived_patterns['rax']
+            del derived_patterns[rax_loc]
             pass
 
         print("0x%x:\t%s\t%s%s" %(i.address, i.mnemonic, i.op_str, comment))
