@@ -26,7 +26,7 @@ For example,
     0x1184: mov     dword ptr [rbp - 0x10], 0       ; [rbp - 0x10] is "i"
     0x118b: jmp     0x119f
     0x118d: mov     eax, dword ptr [rbp - 0x10]     ; [rbp - 0x10] is "i"
-    0x1190: mov     edx, eax
+    0x1190: mov     edx, eax        ; eax is "i" (D)
     0x1192: mov     eax, dword ptr [rbp - 0x10]     ; [rbp - 0x10] is "i"
     0x1195: cdqe
     0x1197: mov     byte ptr [rbp + rax - 9], dl
