@@ -5,7 +5,7 @@ the result eaiser to read.
 
 ## USAGE
 
-    richda.py <binary> <function>
+    richda.py <ELF file> <function>
 
 For example,
 
@@ -48,5 +48,5 @@ For example,
     0x11db: leave
     0x11dc: ret
 
-You see the main function in test is disassembled with annotation of
-variables at the right side.
+You see the main function in test is disassembled with variable names
+at the right side.
