@@ -17,19 +17,29 @@ class VarLoc(object):
     offset: int = 0
     is_deref: bool = False
 
-    def match_partial(self, other):
+    def match_partial(self, other, size):
         '''Match the partial location.
 
-        It match other location exactly if is_deref is True.  It match
-        other location if the base_reg is the same as base_reg or
-        index_reg of the other location and is_deref is False.
+        It match other location exactly if is_deref is True.  It
+        matches other location if the base_reg is the same as base_reg
+        or index_reg of the other location and is_deref is False. It
+        also matches other location if the other locatin points at the
+        middle of the data object defined by "self" and "size".
+
         '''
         if not other:
             return False
         if self == other:
             return True
         if self.is_deref:
-            return False
+            # "other" points at the middle of the data object
+            return ((self.base_reg == other.base_reg and \
+                     ((not self.index_reg) or \
+                      self.index_reg == other.index_reg)) or \
+                    (self.base_reg == other.index_reg and \
+                     not self.index_reg)) and \
+                    other.offset >= self.offset and \
+                    other.offset < self.offset + size
         if self.base_reg:
             return self.base_reg == other.base_reg or \
                 self.base_reg == other.index_reg
@@ -157,7 +167,7 @@ class CFACtx_X86_RSP_RBP(object):
         '''
         patterns = []
         base_addr = func_die.cu.get_top_DIE().attributes['DW_AT_low_pc'].value
-        for var in self.vars:
+        for var, size in self.vars:
             if 'DW_AT_location' not in var.attributes:
                 continue
             loc_attr = var.attributes['DW_AT_location']
@@ -166,7 +176,7 @@ class CFACtx_X86_RSP_RBP(object):
             if expr:
                 expr = self._translate_exprloc(func_die, expr)
                 if expr:
-                    patterns.append((var.attributes['DW_AT_name'].value.decode('utf-8'), expr))
+                    patterns.append((var.attributes['DW_AT_name'].value.decode('utf-8'), size, expr))
                     pass
                 pass
             pass
@@ -292,11 +302,11 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
             derived_patterns.clear()
             pass
 
-        var_patterns = [(var, expr, False)
-                        for var, expr in cfa_ctx.prepare_var_patterns(func_die, i.address)]
-        var_patterns.extend([(var, expr, True)
-                             for expr, var in derived_patterns.items()])
-        for var, expr, derived in var_patterns:
+        var_patterns = [(var, size, expr, False)
+                        for var, size, expr in cfa_ctx.prepare_var_patterns(func_die, i.address)]
+        var_patterns.extend([(var, size, expr, True)
+                             for expr, (var, size) in derived_patterns.items()])
+        for var, size, expr, derived in var_patterns:
             if len(i.operands):
                 left_loc = VarLoc.from_operand(i, i.operands[0])
             else:
@@ -312,8 +322,8 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
                 del derived_patterns[left_loc]
                 pass
 
-            if expr.match_partial(left_loc) or expr.match_partial(right_loc):
-                if (not expr.is_deref) and expr.match_partial(left_loc):
+            if expr.match_partial(left_loc, size) or expr.match_partial(right_loc, size):
+                if (not expr.is_deref) and expr.match_partial(left_loc, size):
                     # Pure registers at left size. Its value is being
                     # replaced. We don't need to annotate it.
                     continue
@@ -337,7 +347,7 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
                     if left_loc and not left_loc.is_deref:
                         # Add to the derived patterns if the left size
                         # operand is a register, not a memory.
-                        derived_patterns[left_loc] = var
+                        derived_patterns[left_loc] = (var, size)
                         pass
                     pass
                 break
@@ -425,8 +435,18 @@ def parse_frame_base(func_die):
         return expr
     return None
 
+def get_type_size(dwarfinfo, type_die):
+    '''Get the size of a type, a variable, or a parameter.'''
+    cu_offset = type_die.cu.cu_offset
+    while 'DW_AT_byte_size' not in type_die.attributes:
+        refaddr = type_die.attributes['DW_AT_type'].value + cu_offset
+        type_die = dwarfinfo.get_DIE_from_refaddr(refaddr)
+        pass
+    return type_die.attributes['DW_AT_byte_size'].value
+
 def create_disassemble_report(f, func_name):
     elffile = ELFFile(f)
+    dwarfinfo = elffile.get_dwarf_info()
     symbol = find_function(elffile, func_name)
     if symbol:
         print('%s @ 0x%x (size: %d)' % (func_name,
@@ -449,16 +469,20 @@ def create_disassemble_report(f, func_name):
 
         vars = []
         for param in iter_func_params(DIE):
+            size = 0
             if 'DW_AT_location' in param.attributes:
-                vars.append(param)
+                size = get_type_size(dwarfinfo, param)
+                vars.append((param, size))
                 pass
-            print('  parameter: %s' % (param.attributes['DW_AT_name'].value.decode('utf-8')))
+            print('  parameter: %s (size: %d)' % (param.attributes['DW_AT_name'].value.decode('utf-8'), size))
             pass
         for var in iter_func_vars(DIE):
+            size = 0
             if 'DW_AT_location' in var.attributes:
-                vars.append(var)
+                size = get_type_size(dwarfinfo, var)
+                vars.append((var, size))
                 pass
-            print('  variable: %s' % (var.attributes['DW_AT_name'].value.decode('utf-8')))
+            print('  variable: %s (size: %d)' % (var.attributes['DW_AT_name'].value.decode('utf-8'), size))
             pass
         code = section.data()[soff:soff+symbol['st_size']]
         cfa_ctx = CFACtx_X86_RSP_RBP(vars)
