@@ -187,10 +187,33 @@ def create_addr2symbol_cache(elffile, code, start_addr):
         pass
     return symcache
 
+def find_basic_blocks(code, start_addr):
+    '''Find the basic blocks in the code.
+
+    The basic blocks are separated by the addresses that is the target
+    of a jump instruction.
+
+    Return a list of the addresses of the start addresses of the basic
+    blocks.
+
+    '''
+    bb_starts = set()
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    for i in md.disasm(code, start_addr):
+        if not i.mnemonic.startswith('j'):
+            continue
+        if i.op_str.startswith('0x'):
+            bb_starts.add(int(i.op_str, 16))
+            pass
+        pass
+    return bb_starts
+
 def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
     cfa_ctx.parse_code(code, start_addr)
 
     symcache = create_addr2symbol_cache(elffile, code, start_addr)
+    bblocks = find_basic_blocks(code, start_addr)
+    derived_patterns = {}
 
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     for i in md.disasm(code, start_addr):
@@ -204,17 +227,64 @@ def disassemble(elffile, func_die, start_addr, code, cfa_ctx):
                 pass
             pass
 
-        var_patterns = cfa_ctx.prepare_var_patterns(func_die, i.address)
-        for var, expr in var_patterns:
+        if i.address in bblocks:
+            derived_patterns.clear()
+            pass
+
+        try:
+            op_left, op_right = i.op_str.split(', ')
+        except ValueError:
+            op_left = i.op_str
+            op_right = ''
+            pass
+
+        var_patterns = [(var, expr, False)
+                        for var, expr in cfa_ctx.prepare_var_patterns(func_die, i.address)]
+        var_patterns.extend([(var, expr, True)
+                             for expr, var in derived_patterns.items()])
+        for var, expr, derived in var_patterns:
+            if op_left in derived_patterns:
+                del derived_patterns[op_left]
+                pass
             if i.op_str.find(expr) >= 0:
+                if '[' not in expr and op_left.find(expr) >= 0:
+                    # Pure registers at left size. Its value is being
+                    # replaced. We don't need to annotate it.
+                    continue
+
                 if not comment:
                     comment = '\t; '
                 else:
                     comment += ', '
                     pass
                 comment = comment + '%s is "%s"' % (expr, var)
+
+                if derived:
+                    comment += ' (D)'
+                    pass
+
+                if i.mnemonic == 'mov' and op_right.find(expr) >= 0 and \
+                   (('[' not in op_right) or ('[' in expr)):
+                    # The expression matches the right operand fully.
+                    # If the expression is only a part of the right
+                    # operand, we don't need to add the left operand to
+                    # the derived patterns.
+                    if '[' not in op_left:
+                        # Add to the derived patterns if the left size
+                        # operand is a register, not a memory.
+                        derived_patterns[op_left] = var
+                        pass
+                    pass
                 break
             pass
+
+        if i.mnemonic == 'call' and 'rax' in derived_patterns:
+            # rax is used to store the return value of a function
+            # call. Its value is being replaced. Remove it from the
+            # derived patterns.
+            del derived_patterns['rax']
+            pass
+
         print("0x%x:\t%s\t%s%s" %(i.address, i.mnemonic, i.op_str, comment))
         pass
     pass
