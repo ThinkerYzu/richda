@@ -1,7 +1,8 @@
 richda (Rich DisAssembler) is an assembler providing rich information.
 
 It provides information of function parameters and variables to make
-the result eaiser to read.
+the result eaiser to read. The binary should be compiled with DWARF to
+provide these information.
 
 NOTICE: x86 only so far.
 
