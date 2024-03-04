@@ -6,6 +6,10 @@ provide these information.
 
 NOTICE: x86 only so far.
 
+## INSTALL
+
+    pip install .
+
 ## USAGE
 
     richda.py <ELF file> <function>
